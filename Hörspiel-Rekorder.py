@@ -9,8 +9,7 @@ import re
 import json
 
 # =====================================================================
-# HIER TRÄGST DU DEINE BITCOIN-WALLET EIN
-BTC_WALLET = "bc1pw4f47k0mfuksjvm8xlh4rj2cdxfq9ss85w9ezs2w05htdznf48hsksfejh" # <-- BITTE EINTRAGEN
+BTC_WALLET = "bc1pw4f47k0mfuksjvm8xlh4rj2cdxfq9ss85w9ezs2w05htdznf48hsksfejh"
 # =====================================================================
 
 TEXTS = {
