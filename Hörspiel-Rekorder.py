@@ -290,20 +290,14 @@ class SpotifyAutoRecorderApp:
             for file in files:
                 self.file_listbox.insert(tk.END, file)
 
-    # ==========================================
-    # HIER IST DER FFMPEG-PFAD FÜR DIE EXE
-    # ==========================================
     def get_ffmpeg_path(self):
         if getattr(sys, 'frozen', False):
-            # Wir laufen als .exe
             base_path = sys._MEIPASS
         else:
-            # Wir laufen als .py Skript
             base_path = os.path.dirname(os.path.abspath(__file__))
         
         ffmpeg_path = os.path.join(base_path, "ffmpeg.exe")
         if not os.path.exists(ffmpeg_path):
-            # Fallback, falls es nicht in der EXE gefunden wird
             ffmpeg_path = os.path.join(os.path.expanduser("~"), ".spotdl", "ffmpeg.exe")
         return ffmpeg_path
 
@@ -328,9 +322,7 @@ class SpotifyAutoRecorderApp:
         timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
         self.temp_output_file = os.path.join(save_dir, f"tmp_{safe_title}_{timestamp}.mp3")
 
-        # HIER WIRD DER PFAD GEHOLT
         ffmpeg_path = self.get_ffmpeg_path()
-
         cmd = [ffmpeg_path, "-y", "-f", "dshow", "-i", "audio=CABLE Output (VB-Audio Virtual Cable)", "-acodec", "libmp3lame", "-b:a", "192k", self.temp_output_file]
 
         self.log(f"Starte Aufnahme: {os.path.basename(self.temp_output_file)}")
@@ -403,30 +395,67 @@ class SpotifyAutoRecorderApp:
         self.log(f"Schneide '{filename}' zu...")
         self.crop_btn.config(state='disabled', text=self.texts["status_crop"])
         
-        try: length_min = int(self.length_entry.get().strip())
-        except: length_min = 60
+        threading.Thread(target=self.crop_audio_task, args=(file_path, final_path), daemon=True).start()
 
-        threading.Thread(target=self.crop_audio_task, args=(file_path, final_path, length_min), daemon=True).start()
-
-    def crop_audio_task(self, input_file, output_file, length_min):
-        # HIER WIRD DER PFAD GEHOLT
+    def crop_audio_task(self, input_file, output_file):
         ffmpeg_path = self.get_ffmpeg_path()
+        
+        self.root.after(0, lambda: self.log("Ermittle echte Länge der Aufnahme..."))
 
-        total_duration = (length_min * 60) + 6
+        # Schritt 1: Die echte Länge der Audiodatei herausfinden
+        probe_cmd = [ffmpeg_path, "-i", input_file]
+        try:
+            process = subprocess.Popen(probe_cmd, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+            _, stderr = process.communicate()
+            match = re.search(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)", stderr)
+            if match:
+                hours, minutes, seconds = map(float, match.groups())
+                total_seconds = (hours * 3600) + (minutes * 60) + seconds
+            else:
+                total_seconds = 0
+        except Exception:
+            total_seconds = 0
 
+        if total_seconds == 0:
+            self.root.after(0, lambda: self.log("Fehler: Länge der Datei konnte nicht ermittelt werden."))
+            self.root.after(0, self.reset_crop_ui)
+            return
+
+        self.root.after(0, lambda: self.log(f"Echte Länge: {int(total_seconds//60)} Minuten. Starte Analyse..."))
+
+        # Schritt 2: Schneiden mit Fortschrittsanzeige
         cmd = [
             ffmpeg_path, "-y",
-            "-ss", "00:00:02.0",
-            "-t", str(total_duration),
             "-i", input_file,
-            "-af", "adelay=3000|3000",
+            "-af", "silenceremove=start_periods=1:start_duration=1:start_threshold=-40dB:stop_periods=-1:stop_duration=1:stop_threshold=-40dB,adelay=3000|3000,apad=pad_dur=3",
             "-c:a", "libmp3lame",
             "-b:a", "192k",
             output_file
         ]
 
         try:
+            # Wir sagen FFmpeg, dass es uns den Fortschritt in einem lesbaren Format geben soll
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+            
+            # Wir lesen die Ausgabe Zeile für Zeile mit
+            for line in process.stdout:
+                # FFmpeg gibt den Fortschritt in der Form "time=00:00:12.34" aus
+                if "time=" in line:
+                    time_match = re.search(r"time=(\d{2}):(\d{2}):(\d{2}\.\d+)", line)
+                    if time_match:
+                        h, m, s = map(float, time_match.groups())
+                        current_seconds = (h * 3600) + (m * 60) + s
+                        
+                        # Prozent berechnen
+                        percent = int((current_seconds / total_seconds) * 100)
+                        if percent > 100: percent = 100
+                        
+                        # Statuszeile aktualisieren
+                        self.root.after(0, lambda p=percent, c=current_seconds, t=total_seconds: self.status_label.config(
+                            text=f"Analysiere... {p}% ({int(c//60)}:{int(c%60):02d} von {int(t//60)}:{int(t%60):02d})", 
+                            fg="blue"
+                        ))
+
             process.wait()
 
             if process.returncode == 0:
